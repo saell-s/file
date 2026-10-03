@@ -1,0 +1,126 @@
+name: filebox
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://filebox:filebox@postgres:5432/filebox
+  REDIS_URL: redis://redis:6379/0
+  REDIS_ENABLED: "true"
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  EVENT_BUS: redis-streams
+  SECRET_KEY: ${SECRET_KEY:-dev-only-secret-change-me-0123456789abcdef}
+  CORS_ORIGINS: http://localhost:8081,http://localhost:19006,http://localhost:8080,http://localhost:4000
+  STORAGE_DIR: /srv/storage
+  PUBLIC_SHARE_BASE_URL: ${PUBLIC_SHARE_BASE_URL:-http://localhost:4000/s}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: filebox
+      POSTGRES_PASSWORD: filebox
+      POSTGRES_DB: filebox
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U filebox -d filebox"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    <<: *app-env
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4000"]
+    ports:
+      - "4000:4000"
+    volumes:
+      - storagedata:/srv/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    <<: *app-env
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    volumes:
+      - storagedata:/srv/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    build: .
+    <<: *app-env
+    command: ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  consumer:
+    build: .
+    <<: *app-env
+    command: ["python", "-m", "app.worker.consumer", "--bus", "redis"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Optional: enable with `docker compose --profile kafka up`
+  kafka:
+    profiles: ["kafka"]
+    image: bitnami/kafka:3.8
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafkadata:/bitnami/kafka
+    restart: unless-stopped
+
+  # Event consumer over Kafka instead of Redis Streams:
+  #   docker compose --profile kafka run --rm consumer \
+  #     python -m app.worker.consumer --bus kafka
+  kafka-consumer:
+    profiles: ["kafka"]
+    build: .
+    <<: *app-env
+    environment:
+      EVENT_BUS: kafka
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    command: ["python", "-m", "app.worker.consumer", "--bus", "kafka"]
+    depends_on:
+      - kafka
+      - redis
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  storagedata:
+  kafkadata:

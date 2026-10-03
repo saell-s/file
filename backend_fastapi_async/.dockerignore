@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+storage/
+.pytest_cache/
+.ruff_cache/
+tests/
+.git/
+Dockerfile
+docker-compose*.yml

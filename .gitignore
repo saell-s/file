@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Builds / caches
+dist/
+.expo/
+web-build/
+
+# Python (backend)
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime data
+*.db
+.env
+
+# OS
+.DS_Store
+Thumbs.db
